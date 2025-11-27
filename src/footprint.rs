@@ -60,6 +60,7 @@ use isla_lib::smt::{smtlib, Checkpoint, EvPath, Event, Solver};
 use isla_lib::smt_parser;
 use isla_lib::source_loc::SourceLoc;
 use isla_lib::zencode;
+use isla_lib::dprint::*;
 
 mod opts;
 use opts::CommonOpts;
