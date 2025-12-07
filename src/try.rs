@@ -64,6 +64,7 @@ use isla_lib::dprint::*;
 
 mod opts;
 use opts::CommonOpts;
+use opts::Architecture;
 
 fn main() {
     let code = isla_main();
@@ -332,7 +333,7 @@ fn isla_main() -> i32 {
     opts.optflag("", "executable", "make trace executable");
 
     let mut hasher = Sha256::new();
-    let (matches, arch) = opts::parse(&mut hasher, &opts);
+    let (matches, arch ) :(_, Architecture<B129>) = opts::parse(&mut hasher, &opts);
     if !matches.free.is_empty() {
         eprintln!("Unexpected arguments: {}", matches.free.join(" "));
         exit(1)
@@ -361,6 +362,7 @@ fn isla_main() -> i32 {
 
     log!(log::VERBOSE, &format!("Parsing took: {}ms", now.elapsed().as_millis()));
 
+	
     0
 }
 
