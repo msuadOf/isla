@@ -46,7 +46,7 @@ use isla_elf::elf;
 use isla_elf::relocation_types::SymbolicRelocation;
 use isla_lib::bitvector::{b129::B129, BV};
 use isla_lib::error::IslaError;
-use isla_lib::executor;
+use isla_lib::{d2, executor};
 use isla_lib::executor::{LocalFrame, StopAction, StopConditions, TaskId, TaskState};
 use isla_lib::init::{initialize_architecture, InitArchWithConfig};
 use isla_lib::ir::*;
@@ -339,6 +339,28 @@ fn isla_main() -> i32 {
     }
     let CommonOpts { num_threads, mut arch, symtab, type_info, isa_config, source_path } =
         opts::parse_with_arch(&mut hasher, &opts, &matches, &arch);
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
     // Note this is the opposite default to other tools
     let assertion_mode =

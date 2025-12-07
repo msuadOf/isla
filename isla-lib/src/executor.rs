@@ -46,7 +46,7 @@ use std::time::{Duration, Instant};
 use crate::bitvector::{b64::B64, required_index_bits, BV};
 use crate::error::{ExecError, IslaError};
 use crate::fraction::Fraction;
-use crate::ir::*;
+use crate::{d3, ir::*};
 use crate::log;
 use crate::primop;
 use crate::primop_util::{build_ite, i128_from_bits, ite_phi, smt_value, symbolic};

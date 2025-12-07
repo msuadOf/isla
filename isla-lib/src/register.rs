@@ -85,13 +85,13 @@ use crate::smt::{Solver, Sym};
 use crate::source_loc::SourceLoc;
 use crate::zencode;
 
-#[derive(Clone)]
+#[derive(Clone,Debug)]
 enum RelaxedVal<'ir, B> {
     Uninit(&'ir Ty<Name>),
     Init { last_write: Val<B>, last_read: Option<Val<B>>, old_writes: Vec<Val<B>> },
 }
 
-#[derive(Clone)]
+#[derive(Clone,Debug)]
 pub struct Register<'ir, B> {
     relaxed: bool,
     value: RelaxedVal<'ir, B>,

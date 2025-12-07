@@ -235,7 +235,7 @@ macro_rules! event_kinds_in_table {
         }
     };
 }
-
+#[derive(Debug)]
 pub enum RegisterKind {
     Read(Name),
     Write(Name),
@@ -590,7 +590,7 @@ fn get_default_sizeof(config: &Value) -> Result<u32, String> {
         Err(e) => Err(format!("failed to parse integer in default_sizeof: {}", e)),
     }
 }
-
+// #[derive(Debug)]
 pub struct ISAConfig<B> {
     /// The identifier for the program counter register
     pub pc: Name,

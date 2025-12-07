@@ -15,3 +15,13 @@ macro_rules! d2 {
         )*
     };
 }
+
+#[macro_export]
+macro_rules! d3 {
+    ($($val:expr),* $(,)?) => {
+        $(
+            println!("[{}:{}] debug: {} = {:#?}", file!(), line!(), stringify!($val), $val);
+        )*
+		exit(0);
+    };
+}

@@ -127,7 +127,7 @@ use smtlib::*;
 
 /// Snapshot of interaction with underlying solver that can be
 /// efficiently cloned and shared between threads.
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug)]
 pub struct Checkpoint<B> {
     num: usize,
     next_var: u32,

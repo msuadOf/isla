@@ -666,7 +666,7 @@ pub enum Def<A, B> {
 
 /// A [Symtab] is a symbol table that maps each `u32` identifier used
 /// in the IR to it's `&str` name and vice-versa.
-#[derive(Clone)]
+#[derive(Clone,Debug)]
 pub struct Symtab<'ir> {
     symbols: Vec<&'ir str>,
     table: HashMap<&'ir str, u32, ahash::RandomState>,
@@ -981,7 +981,7 @@ pub type Reset<B> =
 /// It is a separate type included as a field in the shared state as
 /// there are instances where we need this information before we can
 /// initialize a full `SharedState`.
-#[derive(Clone)]
+#[derive(Clone,Debug)]
 pub struct IRTypeInfo {
     /// A map from struct identifers to a map from field identifiers
     /// to their types
@@ -1001,6 +1001,8 @@ pub struct IRTypeInfo {
 /// All symbolic evaluation happens over some (immutable) IR. The
 /// [SharedState] provides each worker that is performing symbolic
 /// evaluation with a convenient view into that IR.
+
+
 pub struct SharedState<'ir, B> {
     /// A map from function identifers to function bodies and parameter lists
     pub functions: HashMap<Name, FnDecl<'ir, B>>,
@@ -1031,6 +1033,25 @@ pub struct SharedState<'ir, B> {
     pub function_assumptions: Vec<(String, Vec<Option<smtlib::Exp<Loc<String>>>>, smtlib::Exp<Loc<String>>)>,
 }
 
+impl<'ir, B: std::fmt::Debug> fmt::Debug for SharedState<'ir, B> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SharedState")
+            .field("functions", &self.functions)
+            .field("externs", &self.externs)
+            .field("symtab", &self.symtab)
+            .field("type_info", &self.type_info)
+            .field("registers", &self.registers)
+            .field("probes", &self.probes)
+            .field("probe_functions", &self.probe_functions)
+            .field("trace_functions", &self.trace_functions)
+            .field("reset_registers", &self.reset_registers.iter()
+                .map(|(loc, _reset)| format!("{loc:?} -> <closure>"))
+                .collect::<Vec<_>>())
+            .field("reset_constraints", &self.reset_constraints)
+            .field("function_assumptions", &self.function_assumptions)
+            .finish()
+    }
+}
 #[derive(Copy, Clone)]
 pub struct Typedefs<'a> {
     pub structs: &'a HashMap<Name, BTreeMap<Name, Ty<Name>>>,
