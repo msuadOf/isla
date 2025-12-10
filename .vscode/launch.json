@@ -1,6 +1,27 @@
 {
     "version": "0.2.0",
-    "configurations": [
+	"configurations": [
+		{
+			"name": "cargo try.rs",
+			"type": "lldb",
+			"request": "launch",
+			"cargo": {
+				"args": [
+					"run",
+					"--bin=try",
+					"--package=isla",
+					
+				]
+			},
+			"args": [				"-A",
+				 "../isla-snapshots/armv9p4.ir",
+				 "-C",
+				 "configs/armv9p4.toml",
+				 "-i",
+				 "add x0, x1, #3",
+				 "-s",]
+		},
+		
         {
             "name": "Debug Rust Program",
             "type": "lldb",
@@ -46,8 +67,7 @@
 				// "breakpoint set --name isla_footprint::main"  // 完整的模块路径
 
 			],
-            // "stopAtEntry": false,
-            // "runInTerminal": true
+
         }
     ]
 }

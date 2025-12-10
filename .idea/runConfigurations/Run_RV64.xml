@@ -1,7 +1,7 @@
 <component name="ProjectRunConfigurationManager">
-  <configuration default="false" name="Run RV32" type="CargoCommandRunConfiguration" factoryName="Cargo Command">
+  <configuration default="false" name="Run RV64" type="CargoCommandRunConfiguration" factoryName="Cargo Command">
     <option name="buildProfileId" value="dev" />
-    <option name="command" value="run --bin try -- -A ../isla-snapshots/riscv32.ir -C configs/riscv32.toml -i &quot;add x0, x1, #3&quot; -s" />
+    <option name="command" value="run --bin try -- -A ../isla-snapshots/riscv64.ir -C configs/riscv64.toml -i &quot;add x0, x1, #3&quot; -s" />
     <option name="workingDirectory" value="file://$PROJECT_DIR$" />
     <envs />
     <option name="emulateTerminal" value="true" />

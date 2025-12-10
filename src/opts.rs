@@ -122,6 +122,7 @@ fn parse_ir<'input, B: BV>(contents: &'input str, symtab: &mut Symtab<'input>) -
         Ok(ir) => ir,
         Err(parse_error) => {
             eprintln!("Parse error: {}", parse_error);
+            eprintln!("Parse error: {:#?}", parse_error);
             exit(1)
         }
     }

@@ -61,6 +61,7 @@ use isla_lib::smt_parser;
 use isla_lib::source_loc::SourceLoc;
 use isla_lib::zencode;
 use isla_lib::dprint::*;
+// use isla_lib::executor::run_loop_1;
 
 mod opts;
 use opts::CommonOpts;
@@ -362,7 +363,30 @@ fn isla_main() -> i32 {
 
     log!(log::VERBOSE, &format!("Parsing took: {}ms", now.elapsed().as_millis()));
 
-	
+
+    let function_id = shared_state.symtab.lookup("function_name");
+    let (args, ret_ty, instrs) = shared_state.functions.get(&function_id).unwrap();
+    // let mut frame = LocalFrame::new(function_id, args, ret_ty, None, instrs);
+
+
+    let initial_checkpoint= {
+        let solver_cfg = smt::Config::new();
+        let solver_ctx = smt::Context::new(solver_cfg);
+        let mut solver = Solver::<B129>::new(&solver_ctx);;
+
+        // Record register assumptions from defaults; others are recorded at reset-registers
+        let mut sorted_regs: Vec<(&Name, &Register<_>)> = regs.iter().collect();
+        sorted_regs.sort_by_key(|(name, _)| *name);
+        for (name, reg) in sorted_regs {
+            if let Some(value) = reg.read_last_if_initialized() {
+                solver.add_event(Event::AssumeReg(*name, vec![], value.clone()))
+            }
+        }
+        smt::checkpoint(&mut solver)
+    };
+
+
+    // run_loop_1();
     0
 }
 
