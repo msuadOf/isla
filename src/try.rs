@@ -47,7 +47,7 @@ use isla_elf::relocation_types::SymbolicRelocation;
 use isla_lib::bitvector::{b129::B129, BV};
 use isla_lib::error::IslaError;
 use isla_lib::{d, d2, d3, executor};
-use isla_lib::executor::{LocalFrame, StopAction, StopConditions, TaskId, TaskState};
+use isla_lib::executor::{LocalFrame, LocalState, StopAction, StopConditions, TaskId, TaskState};
 use isla_lib::init::{initialize_architecture, InitArchWithConfig};
 use isla_lib::ir::*;
 use isla_lib::log;
@@ -61,7 +61,9 @@ use isla_lib::smt_parser;
 use isla_lib::source_loc::SourceLoc;
 use isla_lib::zencode;
 use isla_lib::dprint::*;
-// use isla_lib::executor::run_loop_1;
+use isla_lib::fraction::Fraction;
+use isla_lib::executor::run_loop_1;
+use isla_lib::executor::frame::LocalFrame1;
 
 mod opts;
 use opts::CommonOpts;
@@ -364,12 +366,12 @@ fn isla_main() -> i32 {
     log!(log::VERBOSE, &format!("Parsing took: {}ms", now.elapsed().as_millis()));
 
 
-    let function_id = shared_state.symtab.lookup("function_name");
+    let function_id = shared_state.symtab.lookup("z_get_SCR_EL3_Type_EA");
     let (args, ret_ty, instrs) = shared_state.functions.get(&function_id).unwrap();
     // let mut frame = LocalFrame::new(function_id, args, ret_ty, None, instrs);
 
 
-    let initial_checkpoint= {
+    // let (initial_checkpoint, mut solver)= {
         let solver_cfg = smt::Config::new();
         let solver_ctx = smt::Context::new(solver_cfg);
         let mut solver = Solver::<B129>::new(&solver_ctx);;
@@ -382,11 +384,26 @@ fn isla_main() -> i32 {
                 solver.add_event(Event::AssumeReg(*name, vec![], value.clone()))
             }
         }
-        smt::checkpoint(&mut solver)
-    };
+        // (smt::checkpoint(&mut solver),solver)
+    // };
 
 
     // run_loop_1();
+    let mut frame =  LocalFrame1::new(
+        // Name{id:1} ,
+
+        instrs,
+    );
+    run_loop_1(
+        // tid: usize,
+        // task_id: TaskId,
+        // task_fraction: &mut Fraction,
+        // queue: &Worker<Task<'ir, 'task, B>>,
+        & mut frame,
+
+        shared_state,
+    & mut solver,
+    ).unwrap();
     0
 }
 
