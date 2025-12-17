@@ -37,6 +37,15 @@ macro_rules! d3 {
 		exit(0);
     };
 }
+
+// 用法：warning!("format string", arg1, arg2, ...);
+#[macro_export]
+macro_rules! dWarning {
+    ($($arg:tt)*) => {
+        println!("\x1b[33mWarning:\x1b[0m {}", format_args!($($arg)*))
+    };
+}
+
 use Instr::*;
 use std::fmt::Write;
 pub fn print_instr_toString<'a, B>(f: &'a mut String,instr: &'a  Instr<Name, B>, symtab: &Symtab) -> &'a mut String{

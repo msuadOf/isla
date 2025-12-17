@@ -46,7 +46,7 @@ use std::time::{Duration, Instant};
 use crate::bitvector::{b64::B64, required_index_bits, BV};
 use crate::error::{ExecError, IslaError};
 use crate::fraction::Fraction;
-use crate::{d1, d2, d3, ir::*};
+use crate::{d1, d2, d3, dWarning, ir::*};
 use crate::log;
 use crate::primop;
 use crate::primop_util::{build_ite, i128_from_bits, ite_phi, smt_value, symbolic};
@@ -1168,7 +1168,7 @@ pub fn run_loop_1<'ir, 'task, B: BV>(
                 frame.pc += 1;
             }
 
-            /*Instr::Call(loc, _, f, args, info) => {
+            Instr::Call(loc, _, f, args, info) => {
                 // match shared_state.functions.get(f) {
                 //     None => {
                 //         match run_special_primop(
@@ -1297,10 +1297,10 @@ pub fn run_loop_1<'ir, 'task, B: BV>(
                 //         frame.instrs = instrs;
                 //     }
                 // }
-            }*/
+            }
 
             Instr::End => match frame.vars().get(&RETURN) {
-                None => panic!("Return variable missing at end of function"),
+                None => {frame.pc+=1;dWarning!("Achieve End");}/*panic!("Return variable missing at end of function")*/,
                 Some(value) => {
                     let value = match value {
                         UVal::Uninit(ty) => symbolic(ty, shared_state, solver, SourceLoc::unknown())?,
