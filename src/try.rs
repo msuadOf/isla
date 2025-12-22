@@ -366,7 +366,7 @@ fn isla_main() -> i32 {
     log!(log::VERBOSE, &format!("Parsing took: {}ms", now.elapsed().as_millis()));
 
 
-    let function_id = shared_state.symtab.lookup("z_get_SCR_EL3_Type_EA");
+    let function_id = shared_state.symtab.lookup("zfmod_int");
     let (args, ret_ty, instrs) = shared_state.functions.get(&function_id).unwrap();
     // let mut frame = LocalFrame::new(function_id, args, ret_ty, None, instrs);
 
@@ -390,7 +390,7 @@ fn isla_main() -> i32 {
 
     // run_loop_1();
     let mut frame =  LocalFrame1::new(
-        // Name{id:1} ,
+        function_id ,
 
         instrs,
     );

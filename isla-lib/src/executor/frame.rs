@@ -102,6 +102,15 @@ pub(super) type Stack<'ir, B> = Option<
     >,
 >;
 
+pub(super) type Stack1<'ir, B> = Option<
+    Arc<
+        dyn 'ir
+            + Send
+            + Sync
+            + Fn(Val<B>, &mut LocalFrame1<'ir, B>, &SharedState<'ir, B>, &mut Solver<B>) -> Result<(), ExecError>,
+    >,
+>;
+
 pub type Backtrace = Vec<(Name, usize)>;
 
 pub fn backtrace_string<'ir>(backtrace: &[(Name, usize)], symtab: &Symtab<'ir>) -> String {
@@ -173,16 +182,16 @@ pub struct LocalFrame<'ir, B> {
 /// executing thread. It is turned into an immutable `Frame` when the
 /// control flow forks on a choice, which can be shared by threads.
 pub struct LocalFrame1<'ir, B> {
-    // pub  function_name: Name,
+    pub  function_name: Name,
     pub  pc: usize,
     // pub(super) forks: u32,
     // pub(super) backjumps: u32,
     pub  local_state: LocalState<'ir, B>,
     // pub(super) memory: Memory<B>,
     pub  instrs: &'ir [Instr<Name, B>],
-    // pub(super) stack_vars: Vec<Bindings<'ir, B>>,
-    pub(super) stack_call: Stack<'ir, B>,
-    // pub(super) backtrace: Backtrace,
+    pub(super) stack_vars: Vec<Bindings<'ir, B>>,
+    pub(super) stack_call: Stack1<'ir, B>,
+    pub(super) backtrace: Backtrace,
     // pub(super) function_assumptions: HashMap<Name, Vec<(Vec<Val<B>>, Val<B>)>>,
     // pub(super) pc_counts: HashMap<B, usize>,
     // pub(super) taken_interrupts: Vec<(TaskId, u8)>,
@@ -267,7 +276,7 @@ impl<'ir, B: BV> LocalFrame1<'ir, B> {
     }*/
 
     pub fn new(
-
+        name: Name,
         // args: &[(Name, &'ir Ty<Name>)],
         // ret_ty: &'ir Ty<Name>,
         // vals: Option<&[Val<B>]>,
@@ -300,16 +309,16 @@ impl<'ir, B: BV> LocalFrame1<'ir, B> {
         let probes = LocalDebugProbes { probe_this_function };
 
         LocalFrame1 {
-            // function_name: name,
+            function_name: name,
             pc: 0,
             // forks: 0,
             // backjumps: 0,
             local_state: LocalState { vars, regs, lets, probes },
             // memory: Memory::new(),
             instrs,
-            // stack_vars: Vec::new(),
+            stack_vars: Vec::new(),
             stack_call: None,
-            // backtrace: Vec::new(),
+            backtrace: Vec::new(),
             // function_assumptions: HashMap::new(),
             // pc_counts: HashMap::new(),
             // taken_interrupts: Vec::new(),
@@ -353,7 +362,7 @@ impl<'ir, B: BV> LocalFrame1<'ir, B> {
     //     self.task_with_checkpoint(task_id, state, Checkpoint::new())
     // }
 
-/*    pub fn set_probes(&mut self, shared_state: &SharedState<'ir, B>) {
+   pub fn set_probes(&mut self, shared_state: &SharedState<'ir, B>) {
         let should_probe_here = if shared_state.probe_functions.is_empty() {
             true
         } else {
@@ -361,7 +370,7 @@ impl<'ir, B: BV> LocalFrame1<'ir, B> {
         };
 
         self.local_state.probes.probe_this_function = should_probe_here
-    }*/
+    }
 }
 
 
@@ -567,6 +576,17 @@ pub(super) fn push_call_stack<B: BV>(frame: &mut LocalFrame<'_, B>) {
 }
 
 pub(super) fn pop_call_stack<B: BV>(frame: &mut LocalFrame<'_, B>) {
+    if let Some(mut vars) = frame.stack_vars.pop() {
+        mem::swap(&mut vars, frame.vars_mut())
+    }
+}
+pub fn push_call_stack1<B: BV>(frame: &mut LocalFrame1<'_, B>) {
+    let mut vars = HashMap::default();
+    mem::swap(&mut vars, frame.vars_mut());
+    frame.stack_vars.push(vars)
+}
+
+pub fn pop_call_stack1<B: BV>(frame: &mut LocalFrame1<'_, B>) {
     if let Some(mut vars) = frame.stack_vars.pop() {
         mem::swap(&mut vars, frame.vars_mut())
     }

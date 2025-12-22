@@ -34,6 +34,7 @@ macro_rules! d3 {
         $(
             println!("[{}:{}] debug: {} = {:#?}", file!(), line!(), stringify!($val), $val);
         )*
+		use std::process::exit;
 		exit(0);
     };
 }

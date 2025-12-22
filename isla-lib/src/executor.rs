@@ -46,7 +46,7 @@ use std::time::{Duration, Instant};
 use crate::bitvector::{b64::B64, required_index_bits, BV};
 use crate::error::{ExecError, IslaError};
 use crate::fraction::Fraction;
-use crate::{d1, d2, d3, dWarning, ir::*};
+use crate::{d, d1, d2, d3, dWarning, ir::*};
 use crate::log;
 use crate::primop;
 use crate::primop_util::{build_ite, i128_from_bits, ite_phi, smt_value, symbolic};
@@ -63,7 +63,7 @@ pub use frame::{backtrace_string, freeze_frame, unfreeze_frame, Backtrace, Frame
 use frame::{pop_call_stack, push_call_stack};
 pub use task::{StopAction, StopConditions, Task, TaskId, TaskInterrupt, TaskState};
 use crate::dprint::print_instr;
-use crate::executor::frame::LocalFrame1;
+use crate::executor::frame::{LocalFrame1, pop_call_stack1, push_call_stack1};
 
 /// Gets a value from a variable `Bindings` map. Note that this function is set up to handle the
 /// following case:
@@ -832,6 +832,181 @@ enum SpecialResult {
 }
 
 #[allow(clippy::too_many_arguments)]
+fn run_special_primop1<'ir, B: BV>(
+    loc: &Loc<Name>,
+    f: Name,
+    args: &[Exp<Name>],
+    info: SourceLoc,
+    tid: usize,
+    task_id: TaskId,
+    frame: &mut LocalFrame<'ir, B>,
+    task_state: &TaskState<B>,
+    shared_state: &SharedState<'ir, B>,
+    solver: &mut Solver<B>,
+) -> Result<SpecialResult, ExecError> {
+    if f == INTERNAL_VECTOR_INIT && args.len() == 1 {
+        let arg = eval_exp(&args[0], &mut frame.local_state, shared_state, solver, info)?.into_owned();
+        match loc {
+            Loc::Id(v) => match (arg, frame.vars().get(v)) {
+                (Val::I64(len), Some(UVal::Uninit(Ty::Vector(_) | Ty::FixedVector(_, _)))) => assign(
+                    tid,
+                    loc,
+                    Val::Vector(vec![Val::Poison; len as usize]),
+                    &mut frame.local_state,
+                    shared_state,
+                    solver,
+                    info,
+                )?,
+                _ => return Err(ExecError::Type(format!("internal_vector_init {:?}", &loc), info)),
+            },
+            _ => return Err(ExecError::Type(format!("internal_vector_init {:?}", &loc), info)),
+        };
+        frame.pc += 1
+    } else if f == INTERNAL_VECTOR_UPDATE && args.len() == 3 {
+        let args = args
+            .iter()
+            .map(|arg| eval_exp(arg, &mut frame.local_state, shared_state, solver, info).map(Cow::into_owned))
+            .collect::<Result<Vec<Val<B>>, _>>()?;
+        let vector = primop::vector_update(args, solver, frame, info)?;
+        assign(tid, loc, vector, &mut frame.local_state, shared_state, solver, info)?;
+        frame.pc += 1
+    } else if f == RESET_REGISTERS {
+        reset_registers(tid, frame, task_state, shared_state, solver, info)?;
+        frame.regs_mut().synchronize();
+        assign(tid, loc, Val::Unit, &mut frame.local_state, shared_state, solver, info)?;
+        frame.pc += 1
+    } else if f == INTERRUPT_PENDING {
+        let pending = interrupt_pending(tid, task_id, frame, task_state, shared_state, solver, info)?;
+        assign(tid, loc, Val::Bool(pending), &mut frame.local_state, shared_state, solver, info)?;
+        frame.pc += 1
+    } else if f == ITE_PHI {
+        let mut true_value = None;
+        let mut symbolics = Vec::new();
+        for cond in args.chunks_exact(2) {
+            let cond_var = match eval_exp(&cond[0], &mut frame.local_state, shared_state, solver, info) {
+                Ok(cond_var) => cond_var.into_owned(),
+                // A variable not found error indicates that the block associated with this condition variable
+                // has not been executed
+                Err(ExecError::VariableNotFound(..)) => Val::Bool(false),
+                Err(err) => return Err(err),
+            };
+            match cond_var {
+                Val::Bool(true) => {
+                    true_value =
+                        Some(eval_exp(&cond[1], &mut frame.local_state, shared_state, solver, info)?.into_owned())
+                }
+                Val::Bool(false) => (),
+                Val::Symbolic(sym) => symbolics.push((sym, &cond[1])),
+                _ => return Err(ExecError::Type("ite_phi".to_string(), info)),
+            }
+        }
+        if let Some(true_value) = true_value {
+            assign(tid, loc, true_value, &mut frame.local_state, shared_state, solver, info)?
+        } else {
+            let symbolics = symbolics
+                .iter()
+                .map(|(sym, arg)| {
+                    Ok((*sym, eval_exp(arg, &mut frame.local_state, shared_state, solver, info)?.into_owned()))
+                })
+                .collect::<Result<Vec<(Sym, Val<B>)>, _>>()?;
+            let result = ite_phi(&symbolics[0], &symbolics[1..], solver, info)?;
+            assign(tid, loc, result, &mut frame.local_state, shared_state, solver, info)?
+        }
+        frame.pc += 1
+    } else if f == REG_DEREF && args.len() == 1 {
+        if let Val::Ref(reg) = eval_exp(&args[0], &mut frame.local_state, shared_state, solver, info)?.into_owned() {
+            match frame.regs_mut().get(reg, shared_state, solver, info)? {
+                Some(value) => {
+                    solver.add_event(Event::ReadReg(reg, Vec::new(), value.clone()));
+                    assign(tid, loc, value.clone(), &mut frame.local_state, shared_state, solver, info)?
+                }
+                None => return Err(ExecError::Type(format!("reg_deref {:?}", &reg), info)),
+            }
+        } else {
+            return Err(ExecError::Type(format!("reg_deref (not a register) {:?}", &f), info));
+        };
+        frame.pc += 1
+    } else if (f == ABSTRACT_CALL || f == ABSTRACT_PRIMOP) && !args.is_empty() {
+        let mut args = args
+            .iter()
+            .map(|arg| eval_exp(arg, &mut frame.local_state, shared_state, solver, info).map(Cow::into_owned))
+            .collect::<Result<Vec<Val<B>>, _>>()?;
+        let abstracted_fn = match args.pop().unwrap() {
+            Val::Ref(f) => f,
+            _ => panic!("Invalid abstract call (no function name provided)"),
+        };
+        let return_ty = if f == ABSTRACT_CALL {
+            &shared_state.functions[&abstracted_fn].1
+        } else {
+            &shared_state.externs[&abstracted_fn].1
+        };
+        let return_value = symbolic(return_ty, shared_state, solver, info)?;
+        solver.add_event(Event::Abstract {
+            name: abstracted_fn,
+            primitive: f == ABSTRACT_PRIMOP,
+            args,
+            return_value: return_value.clone(),
+        });
+        assign(tid, loc, return_value, &mut frame.local_state, shared_state, solver, info)?;
+        frame.pc += 1
+    } else if f == READ_REGISTER_FROM_VECTOR {
+        assert!(args.len() == 2);
+        let n = eval_exp(&args[0], &mut frame.local_state, shared_state, solver, info)?.into_owned();
+        let regs = eval_exp(&args[1], &mut frame.local_state, shared_state, solver, info)?.into_owned();
+        let value = read_register_from_vector(n, regs, &mut frame.local_state, shared_state, solver, info)?;
+        assign(tid, loc, value, &mut frame.local_state, shared_state, solver, info)?;
+        frame.pc += 1
+    } else if f == WRITE_REGISTER_FROM_VECTOR {
+        assert!(args.len() == 3);
+        let n = eval_exp(&args[0], &mut frame.local_state, shared_state, solver, info)?.into_owned();
+        let value = eval_exp(&args[1], &mut frame.local_state, shared_state, solver, info)?.into_owned();
+        let regs = eval_exp(&args[2], &mut frame.local_state, shared_state, solver, info)?.into_owned();
+        write_register_from_vector(n, value, regs, &mut frame.local_state, shared_state, solver, info)?;
+        assign(tid, loc, Val::Unit, &mut frame.local_state, shared_state, solver, info)?;
+        frame.pc += 1
+    } else if f == INSTR_ANNOUNCE {
+        assert!(args.len() == 1);
+        let opcode = eval_exp(&args[0], &mut frame.local_state, shared_state, solver, info)?.into_owned();
+        if let Some((arch_pc, limit)) = task_state.pc_limit {
+            if let Some(reg) = frame.local_state.regs.get(arch_pc, shared_state, solver, info)? {
+                match reg {
+                    Val::Bits(bv) => {
+                        let count = frame.pc_counts.entry(*bv).or_insert(0);
+                        *count += 1;
+                        if *count > limit {
+                            return Err(ExecError::PCLimitReached(bv.lower_u64()));
+                        }
+                    }
+                    // We could just do nothing if the program counter register is symbolic?
+                    _ => {
+                        return Err(ExecError::Type(
+                            "Program counter contains non-bitvector or symbolic value".to_string(),
+                            info,
+                        ))
+                    }
+                }
+            }
+        };
+        match opcode {
+            Val::Bits(bv) if bv.is_zero() && task_state.zero_announce_exit => return Ok(SpecialResult::Exit),
+            _ => (),
+        };
+        solver.add_event(Event::Instr(opcode));
+        assign(tid, loc, Val::Unit, &mut frame.local_state, shared_state, solver, info)?;
+        frame.pc += 1
+    } else if shared_state.type_info.union_ctors.contains(&f) {
+        assert!(args.len() == 1);
+        let arg = eval_exp(&args[0], &mut frame.local_state, shared_state, solver, info)?.into_owned();
+        assign(tid, loc, Val::Ctor(f, Box::new(arg)), &mut frame.local_state, shared_state, solver, info)?;
+        frame.pc += 1
+    } else {
+        let symbol = zencode::decode(shared_state.symtab.to_str(f));
+        return Err(ExecError::NoFunction(symbol, info));
+    }
+    Ok(SpecialResult::Continue)
+}
+
+#[allow(clippy::too_many_arguments)]
 fn run_special_primop<'ir, B: BV>(
     loc: &Loc<Name>,
     f: Name,
@@ -1055,7 +1230,6 @@ pub fn run_loop_1<'ir, 'task, B: BV>(
 
         match &frame.instrs[frame.pc] {
             Instr::Decl(v, ty, _) => {
-
                 frame.vars_mut().insert(*v, UVal::Uninit(ty));
                 frame.pc += 1;
             }
@@ -1169,134 +1343,139 @@ pub fn run_loop_1<'ir, 'task, B: BV>(
             }
 
             Instr::Call(loc, _, f, args, info) => {
-                // match shared_state.functions.get(f) {
-                //     None => {
-                //         match run_special_primop(
-                //             loc,
-                //             *f,
-                //             args,
-                //             *info,
-                //             tid,
-                //             task_id,
-                //             frame,
-                //             task_state,
-                //             shared_state,
-                //             solver,
-                //         )? {
-                //             SpecialResult::Continue => (),
-                //             SpecialResult::Exit => return Ok(Run::Exit),
-                //         }
-                //     }
-                //
-                //     Some((params, ret_ty, instrs)) => {
-                //         frame.set_probes(shared_state);
-                //
-                //         let mut args = args
-                //             .iter()
-                //             .map(|arg| {
-                //                 eval_exp(arg, &mut frame.local_state, shared_state, solver, *info).map(Cow::into_owned)
-                //             })
-                //             .collect::<Result<Vec<Val<B>>, _>>()?;
-                //
-                //         if frame.local_state.should_probe(shared_state, f) {
-                //             log_from!(tid, log::PROBE, probe::call_info(*f, &args, shared_state, *info));
-                //             probe::args_info(tid, &args, shared_state, solver)
-                //         }
-                //
-                //         if shared_state.trace_functions.contains(f) {
-                //             solver.trace_call(*f)
-                //         }
-                //
-                //         if let Some(s) = stop_conditions {
-                //             match s.should_stop(*f, frame.function_name, &frame.backtrace) {
-                //                 Some(StopAction::Kill) => {
-                //                     let symbol = zencode::decode(shared_state.symtab.to_str(*f));
-                //                     return Err(ExecError::Stopped(symbol));
-                //                 }
-                //                 Some(StopAction::Abstract) => {
-                //                     solver.add_event(Event::Abstract {
-                //                         name: *f,
-                //                         args,
-                //                         primitive: false,
-                //                         return_value: Val::Poison,
-                //                     });
-                //                     return Ok(Run::Finished(Val::Poison));
-                //                 }
-                //                 None => (),
-                //             }
-                //         }
-                //
-                //         if let Some(assumptions) = frame.function_assumptions.get(f) {
-                //             for (required_args, result) in assumptions {
-                //                 if args.len() == required_args.len()
-                //                     && required_args.iter().zip(args.iter()).all(|(req, arg)| {
-                //                     primop::eq_anything(req.clone(), arg.clone(), solver, *info)
-                //                         .map(|v| match v {
-                //                             Val::Symbolic(var) => {
-                //                                 solver.check_sat_with(
-                //                                     &smtlib::Exp::Eq(
-                //                                         Box::new(smtlib::Exp::Var(var)),
-                //                                         Box::new(smtlib::Exp::Bool(false)),
-                //                                     ),
-                //                                     *info,
-                //                                 ) == SmtResult::Unsat
-                //                             }
-                //                             Val::Bool(b) => b,
-                //                             _ => panic!("TODO"),
-                //                         })
-                //                         .unwrap()
-                //                 })
-                //                 {
-                //                     assign(
-                //                         tid,
-                //                         loc,
-                //                         result.clone(),
-                //                         &mut frame.local_state,
-                //                         shared_state,
-                //                         solver,
-                //                         *info,
-                //                     )?;
-                //                     solver.add_event(Event::UseFunAssumption {
-                //                         name: *f,
-                //                         args,
-                //                         return_value: result.clone(),
-                //                     });
-                //                     frame.pc += 1;
-                //                     continue 'main_loop;
-                //                 }
-                //             }
-                //         }
-                //
-                //         let caller_pc = frame.pc;
-                //         let caller_instrs = frame.instrs;
-                //         let caller_stack_call = frame.stack_call.clone();
-                //         push_call_stack(frame);
-                //         frame.backtrace.push((frame.function_name, caller_pc));
-                //         frame.function_name = *f;
-                //         frame.vars_mut().insert(RETURN, UVal::Uninit(ret_ty));
-                //
-                //         // Set up a closure to restore our state when
-                //         // the function we call returns
-                //         frame.stack_call = Some(Arc::new(move |ret, frame, shared_state, solver| {
-                //             pop_call_stack(frame);
-                //             frame.set_probes(shared_state);
-                //             // could avoid putting caller_pc into the stack?
-                //             if let Some((name, _)) = frame.backtrace.pop() {
-                //                 frame.function_name = name;
-                //             }
-                //             frame.pc = caller_pc + 1;
-                //             frame.instrs = caller_instrs;
-                //             frame.stack_call = caller_stack_call.clone();
-                //             assign(tid, &loc.clone(), ret, &mut frame.local_state, shared_state, solver, *info)
-                //         }));
-                //
-                //         for (i, arg) in args.drain(..).enumerate() {
-                //             frame.vars_mut().insert(params[i].0, UVal::Init(arg));
-                //         }
-                //         frame.pc = 0;
-                //         frame.instrs = instrs;
-                //     }
-                // }
+				// d!(loc,f,args);
+				
+                match shared_state.functions.get(f) {
+                    None => {
+						d3!("None");
+                        // match run_special_primop(
+                        //     loc,
+                        //     *f,
+                        //     args,
+                        //     *info,
+                        //     tid,
+                        //     task_id,
+                        //     frame,
+                        //     task_state,
+                        //     shared_state,
+                        //     solver,
+                        // )? {
+                        //     SpecialResult::Continue => (),
+                        //     SpecialResult::Exit => return Ok(Run::Exit),
+                        // }
+                    }
+                
+                    Some((params, ret_ty, instrs)) => {
+                        frame.set_probes(shared_state);
+                
+                        let mut args = args
+                            .iter()
+                            .map(|arg| {
+                                eval_exp(arg, &mut frame.local_state, shared_state, solver, *info).map(Cow::into_owned)
+                            })
+                            .collect::<Result<Vec<Val<B>>, _>>()?;
+                
+                        if frame.local_state.should_probe(shared_state, f) {
+							panic!("TODO: Call probe function is not implement");
+							let tid=1;
+                            /* log_from!(tid, log::PROBE, probe::call_info(*f, &args, shared_state, *info));
+                            probe::args_info(tid, &args, shared_state, solver) */
+                        }
+                
+                        if shared_state.trace_functions.contains(f) {
+                            solver.trace_call(*f)
+                        }
+                
+                        // if let Some(s) = stop_conditions {
+                        //     match s.should_stop(*f, frame.function_name, &frame.backtrace) {
+                        //         Some(StopAction::Kill) => {
+                        //             let symbol = zencode::decode(shared_state.symtab.to_str(*f));
+                        //             return Err(ExecError::Stopped(symbol));
+                        //         }
+                        //         Some(StopAction::Abstract) => {
+                        //             solver.add_event(Event::Abstract {
+                        //                 name: *f,
+                        //                 args,
+                        //                 primitive: false,
+                        //                 return_value: Val::Poison,
+                        //             });
+                        //             return Ok(Run::Finished(Val::Poison));
+                        //         }
+                        //         None => (),
+                        //     }
+                        // }
+                
+                        /* if let Some(assumptions) = frame.function_assumptions.get(f) {
+                            for (required_args, result) in assumptions {
+                                if args.len() == required_args.len()
+                                    && required_args.iter().zip(args.iter()).all(|(req, arg)| {
+                                    primop::eq_anything(req.clone(), arg.clone(), solver, *info)
+                                        .map(|v| match v {
+                                            Val::Symbolic(var) => {
+                                                solver.check_sat_with(
+                                                    &smtlib::Exp::Eq(
+                                                        Box::new(smtlib::Exp::Var(var)),
+                                                        Box::new(smtlib::Exp::Bool(false)),
+                                                    ),
+                                                    *info,
+                                                ) == SmtResult::Unsat
+                                            }
+                                            Val::Bool(b) => b,
+                                            _ => panic!("TODO"),
+                                        })
+                                        .unwrap()
+                                })
+                                {
+                                    assign(
+                                        tid,
+                                        loc,
+                                        result.clone(),
+                                        &mut frame.local_state,
+                                        shared_state,
+                                        solver,
+                                        *info,
+                                    )?;
+                                    solver.add_event(Event::UseFunAssumption {
+                                        name: *f,
+                                        args,
+                                        return_value: result.clone(),
+                                    });
+                                    frame.pc += 1;
+                                    continue 'main_loop;
+                                }
+                            }
+                        } */
+                
+                        let caller_pc = frame.pc;
+                        let caller_instrs = frame.instrs;
+                        let caller_stack_call = frame.stack_call.clone();
+                        push_call_stack1(frame);
+                        frame.backtrace.push((frame.function_name, caller_pc));
+                        frame.function_name = *f;
+                        frame.vars_mut().insert(RETURN, UVal::Uninit(ret_ty));
+                
+                        // Set up a closure to restore our state when
+                        // the function we call returns
+                        frame.stack_call = Some(Arc::new(move |ret, frame, shared_state, solver| {
+                            pop_call_stack1(frame);
+                            frame.set_probes(shared_state);
+                            // could avoid putting caller_pc into the stack?
+                            if let Some((name, _)) = frame.backtrace.pop() {
+                                frame.function_name = name;
+                            }
+                            frame.pc = caller_pc + 1;
+                            frame.instrs = caller_instrs;
+                            frame.stack_call = caller_stack_call.clone();
+                            assign(0, &loc.clone(), ret, &mut frame.local_state, shared_state, solver, *info)
+                        }));
+                
+                        for (i, arg) in args.drain(..).enumerate() {
+                            frame.vars_mut().insert(params[i].0, UVal::Init(arg));
+                        }
+                        frame.pc = 0;
+                        frame.instrs = instrs;
+                    }
+                }
             }
 
             Instr::End => match frame.vars().get(&RETURN) {
@@ -1307,25 +1486,28 @@ pub fn run_loop_1<'ir, 'task, B: BV>(
                         UVal::Init(value) => value.clone(),
                     };
 
-                    // if frame.local_state.should_probe(shared_state, &frame.function_name) {
-                    //     let symbol = zencode::decode(shared_state.symtab.to_str(frame.function_name));
-                    //     log_from!(
-                    //         tid,
-                    //         log::PROBE,
-                    //         &format!("Returning {} = {}", symbol, value.to_string(shared_state))
-                    //     );
-                    //     probe::args_info(tid, std::slice::from_ref(&value), shared_state, solver)
-                    // }
-                    //
-                    // if shared_state.trace_functions.contains(&frame.function_name) {
-                    //     solver.trace_return(frame.function_name)
-                    // }
-                    //
-                    // let caller = match &frame.stack_call {
-                    //     None => return Ok(Run::Finished(value)),
-                    //     Some(caller) => Arc::clone(caller),
-                    // };
-                    // (*caller)(value, frame, shared_state, solver)?
+                    if frame.local_state.should_probe(shared_state, &frame.function_name) {
+                        let symbol = zencode::decode(shared_state.symtab.to_str(frame.function_name));
+
+						
+						panic!("TODO: End probe function is not implement");
+                        /* log_from!(
+                            tid,
+                            log::PROBE,
+                            &format!("Returning {} = {}", symbol, value.to_string(shared_state))
+                        );
+                        probe::args_info(tid, std::slice::from_ref(&value), shared_state, solver) */
+                    }
+                    
+                    if shared_state.trace_functions.contains(&frame.function_name) {
+                        solver.trace_return(frame.function_name)
+                    }
+                    
+                    let caller = match &frame.stack_call {
+                        None => return Ok(Run::Finished(value)),
+                        Some(caller) => Arc::clone(caller),
+                    };
+                    (*caller)(value, frame, shared_state, solver)?
                 }
             },
 
