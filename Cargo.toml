@@ -101,7 +101,7 @@ isla-elf = { path = "isla-elf", version = "0.2.0" }
 smtperf = ["isla-lib/smtperf"]
 
 [profile.dev]
-opt-level = 1
+opt-level = 0
 
 [profile.release]
 opt-level = 3

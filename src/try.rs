@@ -64,6 +64,7 @@ use isla_lib::dprint::*;
 use isla_lib::fraction::Fraction;
 use isla_lib::executor::run_loop_1;
 use isla_lib::executor::frame::LocalFrame1;
+use isla_lib::ir::Val;
 
 mod opts;
 use opts::CommonOpts;
@@ -366,9 +367,7 @@ fn isla_main() -> i32 {
     log!(log::VERBOSE, &format!("Parsing took: {}ms", now.elapsed().as_millis()));
 
 
-    let function_id = shared_state.symtab.lookup("zfmod_int");
-    let (args, ret_ty, instrs) = shared_state.functions.get(&function_id).unwrap();
-    // let mut frame = LocalFrame::new(function_id, args, ret_ty, None, instrs);
+
 
 
     // let (initial_checkpoint, mut solver)= {
@@ -388,12 +387,18 @@ fn isla_main() -> i32 {
     // };
 
 
-    // run_loop_1();
+
+    let function_id = shared_state.symtab.lookup("zfmod_int");
+    let (args, ret_ty, instrs) = shared_state.functions.get(&function_id).unwrap();
+    // let mut frame = LocalFrame::new(function_id, args, ret_ty, None, instrs);
+
     let mut frame =  LocalFrame1::new(
         function_id ,
 
         instrs,
     );
+    frame.vars_mut().insert(shared_state.symtab.lookup("zn"), UVal::Init(Val::I128(0)) );
+    frame.vars_mut().insert(shared_state.symtab.lookup("zm"), UVal::Init(Val::I128(0)) );
     run_loop_1(
         // tid: usize,
         // task_id: TaskId,

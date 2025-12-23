@@ -1374,7 +1374,7 @@ pub fn run_loop_1<'ir, 'task, B: BV>(
                                 eval_exp(arg, &mut frame.local_state, shared_state, solver, *info).map(Cow::into_owned)
                             })
                             .collect::<Result<Vec<Val<B>>, _>>()?;
-                
+                            //d3!(args);
                         if frame.local_state.should_probe(shared_state, f) {
 							panic!("TODO: Call probe function is not implement");
 							let tid=1;
